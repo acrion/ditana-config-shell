@@ -1,0 +1,94 @@
+# This file contains configurations common to both Bash and Zsh.
+# It is sourced by .bashrc and, if ditana-config-zsh is installed, by .zshrc as well.
+# shellcheck shell=bash
+
+if pacman -Qi openmpi &> /dev/null; then
+    export OPENMPI_DIR=/usr
+fi
+
+if pacman -Qi intel-oneapi-mkl &> /dev/null; then
+    export MKL_INCLUDE_PATH=$(pacman -Ql intel-oneapi-mkl | grep '\bmkl.h$' | awk '{print $2}' | xargs dirname)
+    export CXXFLAGS="-I$MKL_INCLUDE_PATH $CXXFLAGS"
+fi
+
+if command -v archlinux-java > /dev/null 2>&1; then
+    export JAVA_HOME=/usr/lib/jvm/$(archlinux-java get)
+fi
+
+if [[ -x "$JAVA_HOME/bin/javac" ]]; then
+    export JAVA_COMPILER="$JAVA_HOME/bin/javac"
+fi
+
+if [[ -d "$HOME/.local/bin" ]]; then
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+if [[ -d "$HOME/go/bin" ]]; then
+    export PATH="$HOME/go/bin:$PATH"
+fi
+
+if [[ -d "/usr/share/perl6/site/bin" ]]; then
+    export PATH="/usr/share/perl6/site/bin:$PATH"
+fi
+
+if [[ -d "$HOME/.raku/bin" ]]; then
+    export PATH="$HOME/.raku/bin:$PATH"
+fi
+
+if [[ -d "/usr/local/cuda/bin" ]]; then
+    export PATH="/usr/local/cuda/bin:$PATH"
+fi
+
+log_system() {
+    (
+        local log_path=$HOME/.cache/ditana
+        local temp1="$log_path/systemd.log"
+        local temp2="$log_path/dmesg.log"
+        mkdir -p "$log_path"
+
+        journalctl --priority=5 --follow --catalog --no-hostname &>"$temp1" &
+        local log_systemd_pid=$!
+
+        sudo bash << EOF
+dmesg --human --color --reltime --nopager --level=warn --follow > '$temp2' &
+echo \$! > /tmp/dmesg_pid
+EOF
+
+        local log_dmesg_pid=$(sudo cat /tmp/dmesg_pid)
+        sudo /bin/rm /tmp/dmesg_pid
+
+        # shellcheck disable=SC2064
+        trap "kill $log_systemd_pid; sudo kill $log_dmesg_pid; sudo rm '$temp1' '$temp2'" SIGINT SIGTERM
+
+        tail -Fv "$temp1" "$temp2" /var/log/pacman.log /var/log/Xorg.0.log
+    )
+}
+
+safe_rm() {
+    for arg in "$@"; do
+        if [[ -e "$arg" || -L "$arg" ]]; then
+            if [[ "$(realpath -- "$arg")" == "$(realpath -- "$HOME")" ]]; then
+                echo "Prevented deleting your home directory. In case you really want to, please use /bin/rm." >&2
+                return 1
+            fi
+        elif [[ "$arg" != -* ]]; then
+            echo "Warning: '$arg' does not exist."
+        fi
+    done
+    /bin/rm "$@"
+}
+
+alias rm=safe_rm
+alias open='xdg-open &>/dev/null'
+alias ll='exa --long --icons --classify --hyperlink --group-directories-first'
+alias rm_orphaned='pikaur --remove --nosave --recursive $(pikaur --query --unrequired --deps --quiet)'
+alias monitor_dir='inotifywait -m -r -e modify -e create -e delete'
+alias addpkg='pikaur -Syu'
+alias rmpkg='pikaur -Rsu'
+
+bash /usr/bin/print-system-infos # provided by package ditana-print-system-infos. Contains bash-specific syntax.
+
+for config_file in "$HOME/.shell.d/"*; do
+    # shellcheck disable=SC1090
+    [[ -f "$config_file" ]] && [[ -x "$config_file" ]] && source "$config_file"
+done
